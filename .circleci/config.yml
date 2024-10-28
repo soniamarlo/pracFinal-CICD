@@ -1,0 +1,127 @@
+version: 2.1
+
+jobs:
+  # Job 1: Build the application
+  build:
+    docker:
+      - image: circleci/openjdk:11-jdk
+    steps:
+      - checkout
+      - run:
+          name: Grant Execution Rights to Gradle Wrapper
+          command: chmod +x gradlew
+      - run:
+          name: Build the Application
+          command: ./gradlew build
+      - persist_to_workspace:
+          root: .
+          paths:
+            - build/libs
+
+  # Job 2: Run tests and generate test coverage report
+  test:
+    docker:
+      - image: circleci/openjdk:11-jdk
+    steps:
+      - checkout
+      - run:
+          name: Run Tests
+          command: ./gradlew test
+      - run:
+          name: Generate Coverage Report
+          command: ./gradlew jacocoTestReport
+      - store_test_results:
+          path: build/reports/tests/test
+      - store_artifacts:
+          path: build/reports/jacoco/test/html
+
+  # Job 3: Run Linting
+  lint:
+    docker:
+      - image: circleci/openjdk:11-jdk
+    steps:
+      - checkout
+      - run:
+          name: Run Linting
+          command: ./gradlew checkstyleMain
+      - store_artifacts:
+          path: build/reports/checkstyle
+
+  # Job 4: Static Code Analysis with SonarCloud
+  sonar:
+    docker:
+      - image: circleci/openjdk:11-jdk
+    steps:
+      - checkout
+      - run:
+          name: SonarCloud Analysis
+          command: ./gradlew sonarqube -Dsonar.host.url=${SONAR_HOST_URL} -Dsonar.login=${SONAR_TOKEN}
+
+  # Job 5: Vulnerability Scanning with Snyk
+  snyk_scan:
+    docker:
+      - image: snyk/snyk-cli
+    steps:
+      - checkout
+      - run:
+          name: Run Snyk Vulnerability Scan
+          command: snyk test --all-projects --org=${SNYK_ORG_ID} --token=${SNYK_TOKEN}
+
+  # Job 6: Publish Artifact to Artifact Repository (Only for main branch)
+  publish:
+    docker:
+      - image: circleci/openjdk:11-jdk
+    steps:
+      - checkout
+      - run:
+          name: Build the Application
+          command: ./gradlew assemble
+      - run:
+          name: Publish Artifact
+          command: |
+            mv build/libs/*.war $CIRCLE_ARTIFACTS/your_app_name.war
+      - store_artifacts:
+          path: $CIRCLE_ARTIFACTS
+
+  # Job 7: Deploy to Kubernetes with ArgoCD
+  deploy:
+    docker:
+      - image: lachlanevenson/k8s-helm
+    steps:
+      - checkout
+      - run:
+          name: Deploy to Kubernetes
+          command: helm upgrade --install myapp ./mychart --kubeconfig $KUBECONFIG --set image.tag=${CIRCLE_SHA1}
+
+workflows:
+  version: 2
+  build_and_deploy:
+    jobs:
+      - build
+      - test:
+          requires:
+            - build
+      - lint:
+          requires:
+            - build
+      - sonar:
+          requires:
+            - build
+      - snyk_scan:
+          requires:
+            - build
+      - publish:
+          requires:
+            - test
+            - sonar
+            - snyk_scan
+            - lint
+          filters:
+            branches:
+              only: main
+      - deploy:
+          requires:
+            - publish
+          filters:
+            branches:
+              only: main
